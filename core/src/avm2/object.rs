@@ -914,6 +914,12 @@ macro_rules! define_weak_enum {
                     $( Self::$variant(o) => $strong_enum::$variant($variant(o.0.upgrade(mc)?)).into(), )*
                 }
             }
+
+            $vis fn is_dropped(self) -> bool {
+                match self {
+                    $( Self::$variant(o) => o.0.is_dropped(), )*
+                }
+            }
         }
 
         impl<'gc> $strong_enum<'gc> {

@@ -325,6 +325,7 @@ pub struct Player {
 
     frame_rate: f64,
     forced_frame_rate: bool,
+    force_gc_requested: bool,
     actions_since_timeout_check: u32,
 
     frame_phase: FramePhase,
@@ -2306,6 +2307,7 @@ impl Player {
                 audio_manager,
                 frame_rate: &mut this.frame_rate,
                 forced_frame_rate: this.forced_frame_rate,
+                force_gc_requested: &mut this.force_gc_requested,
                 actions_since_timeout_check: &mut this.actions_since_timeout_check,
                 frame_phase: &mut this.frame_phase,
                 stub_tracker: &mut this.stub_tracker,
@@ -2385,7 +2387,12 @@ impl Player {
         self.update_mouse_state(EnumSet::empty(), false, &mut false);
 
         // GC
-        self.gc_arena.borrow_mut().collect_debt();
+        if self.force_gc_requested {
+            self.force_gc_requested = false;
+            self.gc_arena.borrow_mut().finish_cycle();
+        } else {
+            self.gc_arena.borrow_mut().collect_debt();
+        }
 
         rval
     }
@@ -3010,6 +3017,7 @@ impl PlayerBuilder {
                 // Timing
                 frame_rate,
                 forced_frame_rate,
+                force_gc_requested: false,
                 frame_phase: Default::default(),
                 frame_accumulator: FloatDuration::ZERO,
                 recent_run_frame_timings: VecDeque::with_capacity(10),
