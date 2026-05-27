@@ -54,8 +54,7 @@ impl fmt::Debug for DictionaryObject<'_> {
     }
 }
 
-#[derive(Clone, Collect, HasPrefixField)]
-#[collect(no_drop)]
+#[derive(Clone, HasPrefixField)]
 #[repr(C, align(8))]
 pub struct DictionaryObjectData<'gc> {
     /// Base script object
@@ -80,10 +79,8 @@ struct WeakDictionaryMap<'gc> {
 
 unsafe impl<'gc> Collect<'gc> for WeakDictionaryEntry<'gc> {
     fn trace<C: Trace<'gc>>(&self, cc: &mut C) {
-        if !self.key.is_dropped() {
-            cc.trace(&self.key);
-            cc.trace(&self.value);
-        }
+        cc.trace(&self.key);
+        cc.trace(&self.value);
     }
 }
 
@@ -95,12 +92,40 @@ unsafe impl<'gc> Collect<'gc> for WeakDictionaryMap<'gc> {
     }
 }
 
+unsafe impl<'gc> Collect<'gc> for DictionaryObjectData<'gc> {
+    fn trace<C: Trace<'gc>>(&self, cc: &mut C) {
+        cc.trace(&self.base);
+        cc.trace(&self.has_weak_keys);
+
+        // Safe: tracing may remove stale weak entries, but it never adopts new
+        // GC pointers without a write barrier.
+        let mut weak_entries = unsafe { self.weak_entries.as_ref_cell() }.borrow_mut();
+        weak_entries.trace_and_prune(cc);
+    }
+}
+
 impl<'gc> WeakDictionaryMap<'gc> {
+    fn trace_and_prune<C: Trace<'gc>>(&mut self, cc: &mut C) {
+        self.entries.retain(|entry| {
+            let Some(entry) = entry else {
+                return false;
+            };
+
+            if entry.key.is_dropped() {
+                return false;
+            }
+
+            cc.trace(&entry.key);
+            cc.trace(&entry.value);
+            true
+        });
+    }
+
     fn find_index(&self, key: Object<'gc>) -> Option<usize> {
         self.entries.iter().position(|entry| {
-            entry
-                .as_ref()
-                .is_some_and(|entry| std::ptr::eq(entry.key.as_ptr(), key.as_ptr()))
+            entry.as_ref().is_some_and(|entry| {
+                !entry.key.is_dropped() && std::ptr::eq(entry.key.as_ptr(), key.as_ptr())
+            })
         })
     }
 

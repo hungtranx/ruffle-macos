@@ -201,9 +201,6 @@ pub struct UpdateContext<'gc> {
     /// Whether movies are prevented from changing the stage frame rate.
     pub forced_frame_rate: bool,
 
-    /// Whether ActionScript requested a full garbage collection.
-    pub force_gc_requested: &'gc mut bool,
-
     /// Amount of actions performed since the last timeout check
     pub actions_since_timeout_check: &'gc mut u32,
 
