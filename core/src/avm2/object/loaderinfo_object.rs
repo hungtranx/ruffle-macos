@@ -264,6 +264,31 @@ impl<'gc> LoaderInfoObject<'gc> {
     }
 
     pub fn unload(self, context: &mut UpdateContext<'gc>) {
+        let (stream_kind, stream_url, stream_has_content) = {
+            let loader_stream = self.loader_stream();
+            match &*loader_stream {
+                LoaderStream::NotYetLoaded(movie, content, is_stage) => (
+                    if *is_stage {
+                        "not_yet_loaded_stage"
+                    } else {
+                        "not_yet_loaded"
+                    },
+                    movie.url().to_string(),
+                    content.is_some(),
+                ),
+                LoaderStream::Swf(movie, _) => ("swf", movie.url().to_string(), true),
+            }
+        };
+
+        tracing::debug!(
+            target: "ruffle_cleanup",
+            ?self,
+            stream_kind,
+            stream_url,
+            stream_has_content,
+            "LoaderInfo.unload: resetting loader stream"
+        );
+
         // Reset properties
         let movie = &context.root_swf;
         let empty_swf = Arc::new(SwfMovie::empty(movie.version(), Some(movie.url().into())));
@@ -282,7 +307,19 @@ impl<'gc> LoaderInfoObject<'gc> {
 
         // Remove the Loader's content element if it exists.
         if let Some(child) = loader.child_by_index(0) {
+            tracing::debug!(
+                target: "ruffle_cleanup",
+                ?self,
+                ?child,
+                "LoaderInfo.unload: removing Loader content child"
+            );
             loader.remove_child(context, child);
+        } else {
+            tracing::debug!(
+                target: "ruffle_cleanup",
+                ?self,
+                "LoaderInfo.unload: Loader had no content child"
+            );
         }
     }
 }

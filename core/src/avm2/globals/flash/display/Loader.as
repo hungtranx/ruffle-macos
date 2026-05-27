@@ -4,6 +4,7 @@ package flash.display {
     import flash.display.LoaderInfo;
     import flash.display.DisplayObject;
     import flash.errors.IllegalOperationError;
+    import flash.system.System;
     import flash.system.LoaderContext;
     import flash.utils.ByteArray;
     import flash.net.URLRequest;
@@ -33,6 +34,9 @@ package flash.display {
         public function unloadAndStop(gc:Boolean = true):void {
             stub_method("flash.display.Loader", "unloadAndStop");
             this.unload();
+            if (gc) {
+                System.gc();
+            }
         }
 
         public function close():void {

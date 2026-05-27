@@ -87,6 +87,11 @@ pub fn load<'gc>(
         );
     }
 
+    tracing::debug!(
+        target: "ruffle_cleanup",
+        ?loader_info,
+        "Loader.load: unloading existing content before loading URL"
+    );
     // Unload the loader, in case something was already loaded.
     loader_info.unload(activation.context);
 
@@ -258,6 +263,11 @@ pub fn load_bytes<'gc>(
         );
     }
 
+    tracing::debug!(
+        target: "ruffle_cleanup",
+        ?loader_info,
+        "Loader.loadBytes: unloading existing content before loading bytes"
+    );
     // Unload the loader, in case something was already loaded.
     loader_info.unload(activation.context);
 
@@ -307,6 +317,11 @@ pub fn unload<'gc>(
 
     let loader_info = loader_info.as_loader_info_object().unwrap();
 
+    tracing::debug!(
+        target: "ruffle_cleanup",
+        ?loader_info,
+        "Loader.unload: unloading content"
+    );
     loader_info.unload(activation.context);
 
     Ok(Value::Undefined)

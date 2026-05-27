@@ -308,6 +308,7 @@ pub struct Player {
 
     run_state: RunState,
     needs_render: bool,
+    force_gc_requested: bool,
 
     renderer: Box<dyn RenderBackend>,
     audio: Box<dyn AudioBackend>,
@@ -2234,7 +2235,7 @@ impl Player {
     where
         F: for<'a, 'gc> FnOnce(&mut UpdateContext<'gc>) -> R,
     {
-        self.enter_arena_mut(|gc_context, gc_root, this| {
+        let ret = self.enter_arena_mut(|gc_context, gc_root, this| {
             #[allow(unused_variables)]
             let (
                 stage,
@@ -2294,6 +2295,7 @@ impl Player {
                 timers,
                 current_context_menu,
                 needs_render: &mut this.needs_render,
+                force_gc_requested: &mut this.force_gc_requested,
                 avm1,
                 avm2,
                 external_interface,
@@ -2338,7 +2340,24 @@ impl Player {
                 .and_then(|root| root.as_movie_clip())
                 .map(|clip| clip.current_frame());
             ret
-        })
+        });
+
+        if self.force_gc_requested {
+            tracing::debug!(
+                target: "ruffle_cleanup",
+                current_frame = ?self.current_frame,
+                "Forced GC cycle requested; starting finish_cycle"
+            );
+            self.force_gc_requested = false;
+            self.gc_arena.borrow_mut().finish_cycle();
+            tracing::debug!(
+                target: "ruffle_cleanup",
+                current_frame = ?self.current_frame,
+                "Forced GC cycle finished"
+            );
+        }
+
+        ret
     }
 
     #[cfg(feature = "egui")]
@@ -3043,6 +3062,7 @@ impl PlayerBuilder {
                     RunState::Suspended
                 },
                 needs_render: true,
+                force_gc_requested: false,
                 self_reference: self_ref.clone(),
                 load_behavior: self.load_behavior,
                 spoofed_url: self.spoofed_url.clone(),
