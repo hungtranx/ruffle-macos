@@ -70,7 +70,7 @@ impl<F: FutureSpawner<Error>, I: NavigatorInterface> ExternalNavigatorBackend<F,
     /// Construct a navigator backend with fetch and async capability.
     #[expect(clippy::too_many_arguments)]
     pub fn new(
-        mut base_url: Url,
+        base_url: Url,
         referer: Option<Url>,
         cookie: Option<String>,
         future_spawner: F,
@@ -81,13 +81,44 @@ impl<F: FutureSpawner<Error>, I: NavigatorInterface> ExternalNavigatorBackend<F,
         content: Rc<PlayingContent>,
         interface: I,
     ) -> Self {
+        Self::new_with_user_agent(
+            base_url,
+            referer,
+            cookie,
+            future_spawner,
+            proxy,
+            upgrade_to_https,
+            socket_allowed,
+            socket_mode,
+            content,
+            interface,
+            None,
+        )
+    }
+
+    /// Construct a navigator backend with a host-provided user agent.
+    #[expect(clippy::too_many_arguments)]
+    pub fn new_with_user_agent(
+        mut base_url: Url,
+        referer: Option<Url>,
+        cookie: Option<String>,
+        future_spawner: F,
+        proxy: Option<Url>,
+        upgrade_to_https: bool,
+        socket_allowed: HashSet<String>,
+        socket_mode: SocketMode,
+        content: Rc<PlayingContent>,
+        interface: I,
+        user_agent: Option<String>,
+    ) -> Self {
+        let user_agent = user_agent
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| {
+                concat!("Ruffle/", env!("CARGO_PKG_VERSION"), " (https://ruffle.rs)").to_string()
+            });
         let mut builder = reqwest::ClientBuilder::new()
             .cookie_store(true)
-            .user_agent(concat!(
-                "Ruffle/",
-                env!("CARGO_PKG_VERSION"),
-                " (https://ruffle.rs)"
-            ));
+            .user_agent(user_agent);
 
         if let Some(referer) = referer {
             let mut headers = header::HeaderMap::new();
@@ -97,7 +128,9 @@ impl<F: FutureSpawner<Error>, I: NavigatorInterface> ExternalNavigatorBackend<F,
 
         if let Some(cookie) = cookie {
             let cookie_jar = cookie::Jar::default();
-            cookie_jar.add_cookie_str(&cookie, &base_url);
+            for cookie in cookie.split(';').map(str::trim).filter(|value| !value.is_empty()) {
+                cookie_jar.add_cookie_str(cookie, &base_url);
+            }
             let cookie_store = std::sync::Arc::new(cookie_jar);
             builder = builder.cookie_provider(cookie_store)
         }
