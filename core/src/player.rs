@@ -2115,6 +2115,14 @@ impl Player {
         self.frame_rate
     }
 
+    pub fn set_frame_rate(&mut self, frame_rate: f64) {
+        if frame_rate.is_finite() && frame_rate > 0.0 {
+            self.frame_rate = frame_rate;
+            self.forced_frame_rate = true;
+            self.audio.set_frame_rate(frame_rate);
+        }
+    }
+
     pub fn renderer(&self) -> &dyn RenderBackend {
         &*self.renderer
     }
