@@ -2,6 +2,7 @@
 
 use ruffle_core::events::PlayerNotification;
 use ruffle_frontend_utils::content::ContentDescriptor;
+use serde::Deserialize;
 
 use crate::gui::DialogDescriptor;
 use crate::player::{LaunchOptions, PlayerRunnable};
@@ -9,6 +10,20 @@ use crate::player::{LaunchOptions, PlayerRunnable};
 pub enum OpenType {
     File,
     Directory,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum ManagedWindowCommand {
+    #[serde(rename = "bounds")]
+    Bounds {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    },
+    #[serde(rename = "visible")]
+    Visible { visible: bool },
 }
 
 /// User-defined events.
@@ -45,6 +60,9 @@ pub enum RuffleEvent {
 
     /// Ruffle core has a notification to handle.
     PlayerNotification(PlayerNotification),
+
+    /// The host app changed managed window state.
+    ManagedWindowCommand(ManagedWindowCommand),
 
     /// Export Ruffle Bundle from currently playing content and open save dialog.
     ExportBundle,

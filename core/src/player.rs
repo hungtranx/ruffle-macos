@@ -2116,6 +2116,13 @@ impl Player {
         self.frame_rate
     }
 
+    /// Override the current movie frame rate in FPS.
+    pub fn set_frame_rate(&mut self, frame_rate: f64) {
+        self.frame_rate = frame_rate;
+        self.forced_frame_rate = true;
+        self.audio.set_frame_rate(frame_rate);
+    }
+
     pub fn renderer(&self) -> &dyn RenderBackend {
         &*self.renderer
     }

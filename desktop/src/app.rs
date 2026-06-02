@@ -1,4 +1,4 @@
-use crate::custom_event::{OpenType, RuffleEvent};
+use crate::custom_event::{ManagedWindowCommand, OpenType, RuffleEvent};
 use crate::gui::{GuiController, MENU_HEIGHT};
 use crate::player::{LaunchOptions, PlayerController};
 use crate::preferences::GlobalPreferences;
@@ -14,14 +14,16 @@ use ruffle_core::events::{ImeEvent, ImeNotification, PlayerNotification};
 use ruffle_core::swf::HeaderExt;
 use ruffle_frontend_utils::content::ContentDescriptor;
 use ruffle_render::backend::ViewportDimensions;
+use std::io::BufRead;
 use std::sync::Arc;
+use std::thread;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize, Size};
+use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Size};
 use winit::event::{ElementState, Ime, KeyEvent, Modifiers, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{Fullscreen, Icon, WindowAttributes, WindowId};
+use winit::window::{Fullscreen, Icon, WindowAttributes, WindowId, WindowLevel};
 
 struct MainWindow {
     preferences: GlobalPreferences,
@@ -33,6 +35,8 @@ struct MainWindow {
     min_window_size: LogicalSize<u32>,
     max_window_size: PhysicalSize<u32>,
     no_gui: bool,
+    managed_window: bool,
+    managed_visible: bool,
     preferred_width: Option<f64>,
     preferred_height: Option<f64>,
     start_fullscreen: bool,
@@ -119,6 +123,9 @@ impl MainWindow {
             }
             WindowEvent::Focused(false) => {
                 self.player.handle_event(PlayerEvent::FocusLost);
+                if self.managed_window {
+                    self.gui.window().set_visible(false);
+                }
             }
             WindowEvent::MouseInput { button, state, .. } => {
                 if self.gui.is_context_menu_visible() {
@@ -261,7 +268,7 @@ impl MainWindow {
 
         // To prevent issues like waiting on resize indefinitely (#11364) or desyncing the window state on Windows,
         // do not resize while window is maximized.
-        let should_resize = !self.gui.window().is_maximized();
+        let should_resize = !self.managed_window && !self.gui.window().is_maximized();
 
         let (viewport_size, state) = if should_resize {
             let movie_width = swf_header.stage_size().width().to_pixels();
@@ -336,7 +343,11 @@ impl MainWindow {
         } else {
             None
         });
-        self.gui.window().set_visible(true);
+        if self.managed_window {
+            self.gui.window().set_visible(self.managed_visible);
+        } else {
+            self.gui.window().set_visible(true);
+        }
 
         let viewport_scale_factor = self.gui.window().scale_factor();
         if let Some(mut player) = self.player.get() {
@@ -345,6 +356,49 @@ impl MainWindow {
                 height: viewport_size.height - (height_offset * viewport_scale_factor) as u32,
                 scale_factor: viewport_scale_factor,
             });
+        }
+    }
+
+    fn apply_managed_window_command(&mut self, command: ManagedWindowCommand) {
+        if !self.managed_window {
+            return;
+        }
+
+        match command {
+            ManagedWindowCommand::Bounds {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                if !x.is_finite()
+                    || !y.is_finite()
+                    || !width.is_finite()
+                    || !height.is_finite()
+                    || width <= 0.0
+                    || height <= 0.0
+                {
+                    tracing::warn!(
+                        "Ignoring invalid managed window bounds: {x},{y} {width}x{height}"
+                    );
+                    return;
+                }
+
+                self.gui
+                    .window()
+                    .set_outer_position(LogicalPosition::new(x, y));
+                if let Some(new_viewport_size) = self
+                    .gui
+                    .window()
+                    .request_inner_size(LogicalSize::new(width.max(1.0), height.max(1.0)))
+                {
+                    self.gui.resize(new_viewport_size);
+                }
+            }
+            ManagedWindowCommand::Visible { visible } => {
+                self.managed_visible = visible;
+                self.gui.window().set_visible(visible);
+            }
         }
     }
 
@@ -411,9 +465,55 @@ macro_rules! enter_runtime {
     };
 }
 
+fn spawn_managed_window_command_reader(event_loop: EventLoopProxy<RuffleEvent>) {
+    if let Err(error) = thread::Builder::new()
+        .name("managed-window-stdin".to_string())
+        .spawn(move || {
+            let stdin = std::io::stdin();
+            let reader = std::io::BufReader::new(stdin.lock());
+
+            for line in reader.lines() {
+                match line {
+                    Ok(line) => {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+
+                        match serde_json::from_str::<ManagedWindowCommand>(trimmed) {
+                            Ok(command) => {
+                                let _ = event_loop
+                                    .send_event(RuffleEvent::ManagedWindowCommand(command));
+                            }
+                            Err(error) => {
+                                tracing::warn!("Ignoring invalid managed window command: {error}");
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!("Managed window command stream failed: {error}");
+                        break;
+                    }
+                }
+            }
+
+            let _ = event_loop.send_event(RuffleEvent::ExitRequested);
+        })
+    {
+        tracing::warn!("Unable to start managed window command reader: {error}");
+    }
+}
+
 impl App {
     pub fn new(preferences: GlobalPreferences) -> Result<(Self, EventLoop<RuffleEvent>), Error> {
-        let event_loop = EventLoop::with_user_event().build()?;
+        let mut event_loop_builder = EventLoop::with_user_event();
+        #[cfg(target_os = "macos")]
+        if preferences.cli.managed_window {
+            use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+            event_loop_builder.with_activation_policy(ActivationPolicy::Accessory);
+        }
+
+        let event_loop = event_loop_builder.build()?;
 
         let mut font_database = fontdb::Database::default();
         font_database.load_system_fonts();
@@ -424,6 +524,9 @@ impl App {
             })
             .ok();
         let event_loop_proxy = event_loop.create_proxy();
+        if preferences.cli.managed_window {
+            spawn_managed_window_command_reader(event_loop_proxy.clone());
+        }
         let runtime = tokio::runtime::Runtime::new()?;
 
         Ok((
@@ -450,7 +553,8 @@ impl ApplicationHandler<RuffleEvent> for App {
             let icon =
                 Icon::from_rgba(icon_bytes.to_vec(), 32, 32).expect("App icon should be correct");
 
-            let no_gui = self.preferences.cli.no_gui;
+            let managed_window = self.preferences.cli.managed_window;
+            let no_gui = self.preferences.cli.no_gui || managed_window;
             let min_window_size = if no_gui {
                 (16, 16)
             } else {
@@ -467,6 +571,12 @@ impl ApplicationHandler<RuffleEvent> for App {
                 .with_title("Ruffle")
                 .with_window_icon(Some(icon))
                 .with_min_inner_size(min_window_size);
+
+            if managed_window {
+                window_attributes = window_attributes
+                    .with_decorations(false)
+                    .with_window_level(WindowLevel::AlwaysOnTop);
+            }
 
             #[cfg(target_os = "linux")]
             {
@@ -525,7 +635,7 @@ impl ApplicationHandler<RuffleEvent> for App {
 
             let mut loaded = LoadingState::Loading;
 
-            if movie_url.is_none() {
+            if movie_url.is_none() && !managed_window {
                 // No SWF provided on command line; show window with dummy movie immediately.
                 window.set_visible(true);
                 loaded = LoadingState::Loaded;
@@ -538,6 +648,8 @@ impl ApplicationHandler<RuffleEvent> for App {
                 min_window_size,
                 max_window_size,
                 no_gui,
+                managed_window,
+                managed_visible: false,
                 preferred_width,
                 preferred_height,
                 start_fullscreen,
@@ -652,6 +764,10 @@ impl ApplicationHandler<RuffleEvent> for App {
                         main_window.gui.set_ime_allowed(false);
                     }
                 }
+            }
+
+            (Some(main_window), RuffleEvent::ManagedWindowCommand(command)) => {
+                main_window.apply_managed_window_command(command);
             }
 
             (_, RuffleEvent::ExitRequested) => {

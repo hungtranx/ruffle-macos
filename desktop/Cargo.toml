@@ -54,6 +54,8 @@ unicode-bidi = "0.3.18"
 memmap2.workspace = true
 walkdir.workspace = true
 async-task = "4.7.1"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 fontconfig = { version = "0.10.2", optional = true }
